@@ -11,3 +11,7 @@ Navegue pelos hyperlinks da `Wikipedia` usando os sensores de movimento do seu c
 
 - Dispositivo móvel com acelerômetro
 - Navegador compatível (Chrome, Safari, Edge)
+
+### Link do site
+
+- [Database Labyrinth](https://alicwyz.github.io/Database-Labyrinth/)
