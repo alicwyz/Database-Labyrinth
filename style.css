@@ -1,6 +1,12 @@
 html, body {
   margin: 0;
   padding: 0;
+  background: #0a0a0d;
+  overscroll-behavior: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 canvas {
   display: block;
