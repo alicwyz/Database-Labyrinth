@@ -6,12 +6,27 @@ class SensorData {
     this.permissionGranted = false;
 
     // Dados do acelerômetro
-    this.stepThreshold = 1.75;
+    // Em vez de um limiar fixo sobre a magnitude bruta (que assume o celular
+    // sempre na mesma orientação), acompanhamos uma linha de base com um
+    // filtro low pass e detectamos passos como desvios (picos) acima dela.
+    // Isso funciona independente de como o celular está sendo segurado.
+    this.smoothedMagnitude = 9.8; // linha de base (~gravidade em repouso)
+    // alpha baixo -> linha de base reage devagar, então a oscilação real de
+    // andar (que não é um pico isolado, e sim um vaivém contínuo) não é
+    // "perseguida" e cancelada pelo próprio filtro.
+    this.baselineFilterAlpha = 0.05; // 0..1, quanto maior mais rápido a linha de base se adapta
+    // Preferimos contar passos demais a contar de menos: limiares mais
+    // baixos, então balançar o celular ainda dispara passos, mas andar
+    // normal também passa a ser detectado.
+    this.stepThreshold = 0.9; // desvio acima da linha de base para contar um passo
+    this.stepReleaseThreshold = 0.35; // precisa cair abaixo disso para permitir o próximo passo
+    this.aboveThreshold = false; // detecção por borda (evita contar o mesmo pico várias vezes)
     this.lastStepTime = 0;
-    this.steepCooldown = 500; //ms
+    this.stepCooldown = 350; //ms
 
     // Dados de direção
     this.currentHeading = 0; //(0 - 360 = Norte)
+    this.headingSmoothing = 0.15;
 
     // Distância percorrida
     this.STEP_LENGTH = 0.75;
@@ -90,32 +105,41 @@ class SensorData {
 
   // Responde ao acelerômetro
   handleMotion(event) {
-    // Testa se o acelerômetro inclui gravidade
-    let acc;
-    if (!event.acceleration) {
-      acc = event.accelerationIncludingGravity;
-      acc.z -= 9.8;
-    } else {
-      acc = event.acceleration;
-    }
+    // Usa aceleração sem gravidade quando disponível; senão cai para o
+    // total (com gravidade) e deixa o filtro passa-baixa abaixo absorver
+    // a parcela constante da gravidade, seja qual for a orientação do aparelho.
+    const acc = event.acceleration || event.accelerationIncludingGravity;
 
     // Dados disponíveis?
-    if (!acc) {
+    if (!acc || acc.x === null) {
       console.log("No acceleration data available");
       return;
     }
 
-    // Magnitude do movimento
+    // Magnitude do movimento (invariante à orientação do aparelho)
     const { x, y, z } = acc;
     const magnitude = sqrt(x * x + y * y + z * z);
+
+    // Linha de base adaptativa: acompanha devagar o "repouso" atual
+    // (gravidade + tendência de baixa frequência), independente de como
+    // o celular está sendo carregado.
+    this.smoothedMagnitude =
+      this.smoothedMagnitude * (1 - this.baselineFilterAlpha) +
+      magnitude * this.baselineFilterAlpha;
+
+    const deviation = magnitude - this.smoothedMagnitude;
+
     const currentTime = millis();
     const timeSinceLastStep = currentTime - this.lastStepTime;
 
-    // Limiar de passo
+    // Detecção por borda: só conta um novo passo depois que o sinal
+    // voltou a cair, evitando contar o mesmo pico várias vezes.
     if (
-      magnitude > this.stepThreshold &&
-      timeSinceLastStep > this.steepCooldown
+      !this.aboveThreshold &&
+      deviation > this.stepThreshold &&
+      timeSinceLastStep > this.stepCooldown
     ) {
+      this.aboveThreshold = true;
       this.lastStepTime = currentTime;
       //console.log("STEP DETECTED!");
 
@@ -126,6 +150,8 @@ class SensorData {
 
       this.displacement.x += dx;
       this.displacement.y += dy;
+    } else if (deviation < this.stepReleaseThreshold) {
+      this.aboveThreshold = false;
     }
   }
 
@@ -140,10 +166,21 @@ class SensorData {
       heading = event.absolute ? 360 - event.alpha : this.compassHeading(event.alpha, event.beta, event.gamma);
     }
 
-    if (heading) {
-      // Interpolação para evitar spikes nos dados
-      this.currentHeading = lerp(this.currentHeading, heading, 0.05);
+    // (heading pode ser 0, então comparamos com null/undefined, não com falsy)
+    if (heading !== null && heading !== undefined && !isNaN(heading)) {
+      // Interpolação circular para evitar saltos de 360° -> 0°
+      this.currentHeading = this.lerpAngle(
+        this.currentHeading,
+        heading,
+        this.headingSmoothing
+      );
     }
+  }
+
+  // Interpola entre dois ângulos (graus) pelo caminho mais curto do círculo
+  lerpAngle(from, to, amt) {
+    let delta = ((to - from + 540) % 360) - 180; // diferença no intervalo [-180, 180)
+    return (from + delta * amt + 360) % 360;
   }
 
   //Conversor eixos em orientação: stackoverflow.com
