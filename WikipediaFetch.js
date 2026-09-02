@@ -7,36 +7,57 @@ class WikipediaFetch {
     // Cache
     this.pageCache = {};
 
-    // Loading
-    this.isLoading = false;
+    // Fetches em andamento (evita pedidos duplicados para o mesmo título)
+    this.pendingFetches = {};
   }
 
-  // Adiciona conteúdos da página ao cache
-  async fetchPageByTitle(title) {
-    // Checa se está no cache
+  // Um título já está pronto para uso (título + extrato + links)?
+  isCached(title) {
+    return !!this.pageCache[title];
+  }
+
+  // Garante que a página está (ou vai ficar) no cache.
+  // Chamadas repetidas para o mesmo título compartilham o mesmo fetch.
+  fetchPageByTitle(title) {
     if (this.pageCache[title]) {
-      this.isLoading = false;
-      return;
+      return Promise.resolve(this.pageCache[title]);
     }
 
+    if (this.pendingFetches[title]) {
+      return this.pendingFetches[title];
+    }
+
+    const promise = this.loadPage(title).finally(() => {
+      delete this.pendingFetches[title];
+    });
+
+    this.pendingFetches[title] = promise;
+    return promise;
+  }
+
+  // Busca de fato o título + extrato + links, em paralelo
+  async loadPage(title) {
     console.log(`Fetching page: ${title}`);
-    this.isLoading = true;
 
     // Fetch -> Título + primeiro parágrafo
     const summaryUrl = `https://pt.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(
       title
     )}`;
-    const summaryResponse = await fetch(summaryUrl);
-    const summaryData = await summaryResponse.json(); //.title, .extract
-
-    //console.log("Summary fetched", summaryData.title);
 
     // Hyperlinks da página
     const linksUrl = `https://pt.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(
       title
     )}&prop=links&pllimit=50&format=json&origin=*`;
-    const linksResponse = await fetch(linksUrl);
-    const linksData = await linksResponse.json(); //query.pages.links
+
+    // As duas requisições não dependem uma da outra -> em paralelo
+    const [summaryResponse, linksResponse] = await Promise.all([
+      fetch(summaryUrl),
+      fetch(linksUrl),
+    ]);
+    const [summaryData, linksData] = await Promise.all([
+      summaryResponse.json(), //.title, .extract
+      linksResponse.json(), //query.pages.links
+    ]);
 
     // Extrair páginas
     const pages = linksData.query.pages;
@@ -64,7 +85,7 @@ class WikipediaFetch {
     this.pageCache[title] = page;
     console.log("Page loaded successfully!");
 
-    this.isLoading = false;
+    return page;
   }
 
   // Verifica se o hyperlink é válido
@@ -110,8 +131,6 @@ class WikipediaFetch {
   // Adiciona uma página aleatória
   async fetchRandomPage() {
     console.log("Fetching random page...");
-    this.isLoading = true;
-    let returnTitle = null;
 
     try {
       // API página aleatória
@@ -120,14 +139,11 @@ class WikipediaFetch {
       const data = await response.json();
 
       await this.fetchPageByTitle(data.title);
-      returnTitle = data.title;
-      
+      return data.title;
+
     } catch (error) {
       console.error("Error fetching random page:", error);
-      this.isLoading = false;
-      return returnTitle;
+      return null;
     }
-
-    return returnTitle;
   }
 }
